@@ -1,5 +1,6 @@
 package bake
 
+/*
 import (
 	"io"
 )
@@ -25,3 +26,4 @@ type Command interface {
 	Inputs() []string
 	Outputs() []string
 }
+*/

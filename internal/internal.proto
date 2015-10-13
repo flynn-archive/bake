@@ -1,0 +1,8 @@
+package internal;
+
+message File {
+	required string Name = 1;
+	required string Type = 2;
+	required string Hash = 3;
+	repeated File Children = 4;
+}
