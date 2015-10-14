@@ -120,4 +120,8 @@ end
 function exec(text)
 	__bake_add_command("exec", text)
 end
+
+function depends(text)
+	__bake_add_command("exec", text)
+end
 `

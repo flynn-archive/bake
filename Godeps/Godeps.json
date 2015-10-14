@@ -1,0 +1,22 @@
+{
+	"ImportPath": "github.com/flynn/bake",
+	"GoVersion": "go1.5.1",
+	"Packages": [
+		"./..."
+	],
+	"Deps": [
+		{
+			"ImportPath": "github.com/Shopify/go-lua",
+			"Rev": "57b00c4ca3008775fe575a5aa94e4b828fc907de"
+		},
+		{
+			"ImportPath": "github.com/davecgh/go-spew/spew",
+			"Rev": "e762b3d1320b76030bd7f6cc2bfc3d9acce874c0"
+		},
+		{
+			"ImportPath": "github.com/gogo/protobuf/proto",
+			"Comment": "v0.1-7-gdb5f32b",
+			"Rev": "db5f32b98601835052def16cc7400e0c4580781c"
+		}
+	]
+}
