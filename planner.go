@@ -1,12 +1,11 @@
 package bake
 
-import (
-	"fmt"
-)
-
 // Planner represents the object that creates a build plan.
+// This type is not safe for multiple goroutines.
 type Planner struct {
 	pkg *Package
+
+	builds map[string]*Build
 }
 
 // NewPlanner returns a new instance of Planner.
@@ -15,87 +14,72 @@ func NewPlanner(pkg *Package) *Planner {
 }
 
 // Plan creates a build plan for a target in a package.
-// The changeset represents a set of files that have changed.
-func (p *Planner) Plan(targets []string, changeset map[string]struct{}) (*Build, error) {
-	// Create a look up of builds by target so dependencies share references.
-	builds := make(map[string]*Build)
+func (p *Planner) Plan(patterns []string) (*Build, error) {
+	// Create a lookup of builds by target so dependencies share references.
+	p.builds = make(map[string]*Build)
+	defer func() { p.builds = nil }()
 
-	// Default changeset to an empty map.
-	if changeset == nil {
-		changeset = make(map[string]struct{})
+	dependencies, err := p.planMatches(patterns)
+	if err != nil {
+		return nil, err
 	}
 
-	// Create top-level build.
-	b := &Build{}
-
-	for _, target := range targets {
-		// Look up target reference.
-		t := p.pkg.Target(target)
-		if t == nil {
-			return nil, fmt.Errorf("target not found: %s", target)
-		}
-
-		// Plan build recursively starting from target.
-		subbuild, err := p.planTarget(t, changeset, builds)
-		if err != nil {
-			return nil, err
-		} else if subbuild == nil {
-			continue
-		}
-		b.dependencies = append(b.dependencies, subbuild)
-	}
-
-	// If there are no subbuilds then return nil.
-	if len(b.dependencies) == 0 {
-		return nil, nil
-	}
-
+	b := newBuild(nil)
+	b.dependencies = dependencies
 	return b, nil
 }
 
-func (p *Planner) planTarget(t *Target, changeset map[string]struct{}, builds map[string]*Build) (*Build, error) {
+// planMatches returns builds for all targets matching any of the patterns.
+func (p *Planner) planMatches(patterns []string) ([]*Build, error) {
+	// Plan each pattern.
+	var subbuilds []*Build
+	for _, pattern := range patterns {
+		a, err := p.planMatch(pattern)
+		if err != nil {
+			return nil, err
+		}
+		subbuilds = append(subbuilds, a...)
+	}
+	return Builds(subbuilds).dedupe(), nil
+}
+
+// planMatch plans all targets matching a pattern.
+func (p *Planner) planMatch(pattern string) ([]*Build, error) {
+	targets, err := p.pkg.MatchTargets(pattern)
+	if err != nil {
+		return nil, err
+	}
+
+	var builds []*Build
+	for _, t := range targets {
+		b, err := p.planTarget(t)
+		if err != nil {
+			return nil, err
+		}
+		builds = append(builds, b)
+	}
+	return builds, nil
+}
+
+// planTarget plans a single target.
+func (p *Planner) planTarget(t *Target) (*Build, error) {
 	// Reuse build reference if another target already depends on it.
-	if b := builds[t.Name]; b != nil {
+	if b := p.builds[t.Name]; b != nil {
 		return b, nil
 	}
 
 	// Find dependent builds and changed inputs.
-	var inputsChanged bool
-	var dependencies []*Build
-	for _, input := range t.Inputs {
-		subtarget := p.pkg.Target(input)
-
-		// If there is no named target then it must be a file.
-		// Mark this build as dirty if it's in the changeset.
-		if subtarget == nil {
-			if _, ok := changeset[input]; ok {
-				inputsChanged = true
-			}
-			continue
-		}
-
-		// If input is a target then plan it as a build.
-		subbuild, err := p.planTarget(subtarget, changeset, builds)
-		if err != nil {
-			return nil, err
-		} else if subbuild == nil {
-			continue
-		}
-		dependencies = append(dependencies, subbuild)
-		inputsChanged = true
-	}
-
-	// If no input files or targets have changed then ignore build.
-	if !inputsChanged {
-		return nil, nil
+	dependencies, err := p.planMatches(t.Inputs)
+	if err != nil {
+		return nil, err
 	}
 
 	// Create build and add it to the lookup.
-	b := &Build{
-		target:       t,
-		dependencies: dependencies,
-	}
-	builds[b.target.Name] = b
+	b := newBuild(t)
+	b.dependencies = dependencies
+
+	// Add it it to the lookup.
+	p.builds[b.target.Name] = b
 
 	return b, nil
 }

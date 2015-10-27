@@ -21,10 +21,10 @@ var _ = proto.Marshal
 var _ = math.Inf
 
 type File struct {
-	Name             *string `protobuf:"bytes,1,req,name=name" json:"name,omitempty"`
-	Type             *string `protobuf:"bytes,2,req,name=type" json:"type,omitempty"`
-	Hash             *string `protobuf:"bytes,3,req,name=hash" json:"hash,omitempty"`
-	Children         []*File `protobuf:"bytes,4,rep,name=children" json:"children,omitempty"`
+	Name             *string `protobuf:"bytes,1,req" json:"Name,omitempty"`
+	Type             *string `protobuf:"bytes,2,req" json:"Type,omitempty"`
+	Hash             *string `protobuf:"bytes,3,req" json:"Hash,omitempty"`
+	Children         []*File `protobuf:"bytes,4,rep" json:"Children,omitempty"`
 	XXX_unrecognized []byte  `json:"-"`
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"path"
 	"regexp"
 	"sync"
 )
@@ -33,12 +34,56 @@ func (p *Package) Target(name string) *Target {
 	return nil
 }
 
+// MatchTargets returns a list of targets matching a glob pattern.
+// Matches pattern against target name or outputs.
+func (p *Package) MatchTargets(pattern string) ([]*Target, error) {
+	var a []*Target
+	for _, t := range p.Targets {
+		if matched, err := MatchTarget(pattern, t); err != nil {
+			return nil, err
+		} else if matched {
+			a = append(a, t)
+		}
+	}
+	return a, nil
+}
+
 // Target represents a buildable rule.
 type Target struct {
-	Name     string // e.g. "test"
+	// Unique identifier for the target within the package.
+	Name string
+
+	// Indicates that the target does not produce a file.
+	// For example, "test" or "clean".
+	Phony bool
+
+	// Text shown to users instead of commands.
+	Title string
+
+	// The commands to execute to build the target.
 	Commands []Command
-	Inputs   []string // dependencies
-	Outputs  []string // declared outputs
+
+	// Depedent target names.
+	Inputs []string
+
+	// Files to be retained after build.
+	// Any files written that are not declared here are assumed to be temporary files.
+	Outputs []string
+}
+
+// MatchTarget returns true if t's name or outputs match pattern.
+func MatchTarget(pattern string, t *Target) (matched bool, err error) {
+	if matched, err = path.Match(pattern, t.Name); matched || err != nil {
+		return
+	}
+
+	for _, output := range t.Outputs {
+		if matched, err = path.Match(pattern, output); matched || err != nil {
+			return
+		}
+	}
+
+	return
 }
 
 // Command represents an executable command.
@@ -46,7 +91,7 @@ type Command interface{}
 
 // ExecCommand represents a command that is executed against the OS's exec().
 type ExecCommand struct {
-	Text string
+	Args []string
 }
 
 // File represents a physical file or directory in a package.
@@ -121,6 +166,26 @@ func newBuild(target *Target) *Build {
 	return b
 }
 
+// Close recursively closes the build's readers and its dependencies readers.
+func (b *Build) Close() error {
+	b.stdout.reader.Close()
+	b.stderr.reader.Close()
+
+	for _, subbuild := range b.dependencies {
+		subbuild.Close()
+	}
+
+	return nil
+}
+
+// Name returns the target's name. Returns a blank string if a top-level build.
+func (b *Build) Name() string {
+	if b.target == nil {
+		return ""
+	}
+	return b.target.Name
+}
+
 // Target returns the build target.
 func (b *Build) Target() *Target { return b.target }
 
@@ -135,6 +200,21 @@ func (b *Build) Err() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.err
+}
+
+// RootErr recursively searches the build tree and finds the build error.
+func (b *Build) RootErr() error {
+	if err := b.Err(); err != nil && err != ErrDependency && err != ErrCanceled {
+		return err
+	}
+
+	for _, subbuid := range b.dependencies {
+		if err := subbuid.RootErr(); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // Done marks the build as complete and sets the error, if any.
@@ -155,4 +235,23 @@ func (b *Build) Stdout() io.ReadCloser {
 // Stderr returns the standard error stream.
 func (b *Build) Stderr() io.ReadCloser {
 	return b.stderr.reader
+}
+
+// Builds represents a
+type Builds []*Build
+
+// dedupe returns a unique set of builds in a.
+func (a Builds) dedupe() Builds {
+	set := make(map[*Build]struct{})
+
+	other := make([]*Build, 0, len(a))
+	for _, b := range a {
+		if _, ok := set[b]; ok {
+			continue
+		}
+
+		other = append(other, b)
+		set[b] = struct{}{}
+	}
+	return other
 }
