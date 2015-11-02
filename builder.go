@@ -108,7 +108,6 @@ func (b *Builder) build(build *Build) {
 	target := build.Target()
 	if target != nil {
 		fmt.Printf("BUILD: %s\n", target.Name)
-
 		for _, cmd := range target.Commands {
 			if err := b.run(build, cmd); err != nil {
 				build.Done(err)
@@ -154,6 +153,7 @@ func (b *Builder) runExec(build *Build, cmd *ExecCommand) error {
 	fmt.Printf("  %s\n", strings.Join(cmd.Args, " "))
 
 	c := exec.Command(cmd.Args[0], cmd.Args[1:]...)
+	c.Dir = build.target.WorkDir
 	c.Stdout = build.stdout.writer
 	c.Stderr = build.stderr.writer
 	return c.Run()

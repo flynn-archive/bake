@@ -60,6 +60,9 @@ type Target struct {
 	// Text shown to users instead of commands.
 	Title string
 
+	// The working directory that commands are run from.
+	WorkDir string
+
 	// The commands to execute to build the target.
 	Commands []Command
 

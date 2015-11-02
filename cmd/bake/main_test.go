@@ -4,17 +4,18 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"reflect"
 	"testing"
 
 	main "github.com/flynn/bake/cmd/bake"
 )
 
 func TestMain_ParseFlags_Target(t *testing.T) {
-	opt, err := NewMain().ParseFlags([]string{"foo:bar"})
-	if err != nil {
+	m := NewMain()
+	if err := m.ParseFlags([]string{"foo:bar"}); err != nil {
 		t.Fatal(err)
-	} else if opt.Target != "foo:bar" {
-		t.Fatalf("unexpected target: %s", opt.Target)
+	} else if !reflect.DeepEqual(m.Targets, []string{"foo:bar"}) {
+		t.Fatalf("unexpected targets: %+v", m.Targets)
 	}
 }
 

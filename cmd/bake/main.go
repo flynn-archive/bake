@@ -11,6 +11,9 @@ import (
 	"github.com/flynn/bake"
 )
 
+// DefaultPath is the default path to begin parsing from.
+const DefaultPath = "."
+
 func main() {
 	m := NewMain()
 	if err := m.ParseFlags(os.Args[1:]); err != nil {
@@ -29,8 +32,8 @@ type Main struct {
 	// List of targets to build.
 	Targets []string // target name
 
-	// Present working directory where commands are run from.
-	Pwd string
+	// Directory to start parsing from.
+	Path string
 
 	Stdin  io.Reader
 	Stdout io.Writer
@@ -40,6 +43,8 @@ type Main struct {
 // NewMain returns a new instance of Main.
 func NewMain() *Main {
 	return &Main{
+		Path: DefaultPath,
+
 		Stdin:  os.Stdin,
 		Stdout: os.Stdout,
 		Stderr: os.Stderr,
@@ -48,18 +53,24 @@ func NewMain() *Main {
 
 // Run executes the program.
 func (m *Main) Run() error {
-	// Change directory, if specified.
-	if m.Pwd != "" {
-		if err := os.Chdir(m.Pwd); err != nil {
-			return err
-		}
-	}
-
-	// Parse build rules.
-	pkg, err := m.parseFile("Bakefile")
+	// Save working directory to restore when program is done.
+	wd, err := os.Getwd()
 	if err != nil {
 		return err
 	}
+	defer os.Chdir(wd)
+
+	// Change to new directory
+	if err := os.Chdir(m.Path); err != nil {
+		return err
+	}
+
+	// Parse build rules.
+	parser := bake.NewParser()
+	if err := parser.ParseDir(m.Path); err != nil {
+		return err
+	}
+	pkg := parser.Package
 
 	// Create planner.
 	p := bake.NewPlanner(pkg)
@@ -92,7 +103,7 @@ func (m *Main) Run() error {
 func (m *Main) ParseFlags(args []string) error {
 	fs := flag.NewFlagSet("bake", flag.ContinueOnError)
 	fs.SetOutput(m.Stderr)
-	fs.StringVar(&m.Pwd, "C", "", "working directory")
+	fs.StringVar(&m.Path, "C", DefaultPath, "working directory")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -104,17 +115,6 @@ func (m *Main) ParseFlags(args []string) error {
 	m.Targets = fs.Args()
 
 	return nil
-}
-
-// parseFile parses the contents of filename into a package.
-func (m *Main) parseFile(filename string) (*bake.Package, error) {
-	f, err := os.Open(filename)
-	if os.IsNotExist(err) {
-		return nil, errors.New("Bakefile not found")
-	}
-	defer f.Close()
-
-	return bake.NewParser().Parse(f)
 }
 
 // pipeReaders creates goroutines for all readers to copy to stderr & stdout.
