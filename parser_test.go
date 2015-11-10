@@ -1,6 +1,9 @@
 package bake_test
 
 import (
+	"io/ioutil"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -10,17 +13,23 @@ import (
 
 // Ensure a dependency-less target can be parsed.
 func TestParser_Parse_NoDependencies(t *testing.T) {
-	p := bake.NewParser()
-	if err := p.ParseString("Bakefile", `
+	path := MustTempDir()
+	defer MustRemoveAll(path)
+
+	MustWriteFile(filepath.Join(path, "Bakefile"), []byte(`
 target("bin/flynn-host", function()
 	exec "run1.sh"
 	exec "run2.sh"
 end)
-`); err != nil {
+`))
+
+	// Parse directory.
+	p := bake.NewParser()
+	if err := p.ParseDir(path); err != nil {
 		t.Fatal(err)
 	}
 
-	// Retrieve target from package.
+	// Parse directory and retrieve target from package.
 	target := p.Package.Target("bin/flynn-host")
 	if target == nil {
 		t.Fatal("expected target")
@@ -36,10 +45,16 @@ end)
 
 // Ensure a target can be parsed with dependencies.
 func TestParser_Parse_Dependencies(t *testing.T) {
-	p := bake.NewParser()
-	if err := p.ParseString("Bakefile", `
+	path := MustTempDir()
+	defer MustRemoveAll(path)
+
+	MustWriteFile(filepath.Join(path, "Bakefile"), []byte(`
 target("bin/flynn-host", depends("A", "B"), function() end)
-`); err != nil {
+`))
+
+	// Parse directory.
+	p := bake.NewParser()
+	if err := p.ParseDir(path); err != nil {
 		t.Fatal(err)
 	}
 
@@ -49,5 +64,28 @@ target("bin/flynn-host", depends("A", "B"), function() end)
 		t.Fatal("expected target")
 	} else if !reflect.DeepEqual(target.Inputs, []string{"A", "B"}) {
 		t.Fatalf("unexpected inputs: %v", target.Inputs)
+	}
+}
+
+// MustTempDir returns a path to a temporary directory. Panic on error.
+func MustTempDir() string {
+	path, err := ioutil.TempDir("", "bake-")
+	if err != nil {
+		panic(err)
+	}
+	return path
+}
+
+// MustRemoveAll recursively deletes a path. Panic on error.
+func MustRemoveAll(path string) {
+	if err := os.RemoveAll(path); err != nil {
+		panic(err)
+	}
+}
+
+// MustWriteFile writes data to filename. Panic on error.
+func MustWriteFile(filename string, data []byte) {
+	if err := ioutil.WriteFile(filename, data, 0666); err != nil {
+		panic(err)
 	}
 }
