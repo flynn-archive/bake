@@ -28,6 +28,9 @@ type Builder struct {
 	wg      sync.WaitGroup
 	closing chan struct{}
 
+	// Used for tracking read/write access during build steps.
+	FileSystem FileSystem
+
 	Output io.Writer
 }
 
@@ -37,7 +40,8 @@ func NewBuilder() *Builder {
 		builds:  make(map[*Build]struct{}),
 		closing: make(chan struct{}),
 
-		Output: ioutil.Discard,
+		FileSystem: &nopFileSystem{},
+		Output:     ioutil.Discard,
 	}
 }
 
