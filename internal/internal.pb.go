@@ -9,7 +9,8 @@ It is generated from these files:
 	internal/internal.proto
 
 It has these top-level messages:
-	File
+	TargetSnapshot
+	FileSnapshot
 */
 package internal
 
@@ -20,44 +21,68 @@ import math "math"
 var _ = proto.Marshal
 var _ = math.Inf
 
-type File struct {
-	Name             *string `protobuf:"bytes,1,req" json:"Name,omitempty"`
-	Type             *string `protobuf:"bytes,2,req" json:"Type,omitempty"`
-	Hash             *string `protobuf:"bytes,3,req" json:"Hash,omitempty"`
-	Children         []*File `protobuf:"bytes,4,rep" json:"Children,omitempty"`
-	XXX_unrecognized []byte  `json:"-"`
+type TargetSnapshot struct {
+	Name             *string         `protobuf:"bytes,1,req" json:"Name,omitempty"`
+	Hash             *string         `protobuf:"bytes,2,req" json:"Hash,omitempty"`
+	Inputs           []*FileSnapshot `protobuf:"bytes,3,rep" json:"Inputs,omitempty"`
+	XXX_unrecognized []byte          `json:"-"`
 }
 
-func (m *File) Reset()         { *m = File{} }
-func (m *File) String() string { return proto.CompactTextString(m) }
-func (*File) ProtoMessage()    {}
+func (m *TargetSnapshot) Reset()         { *m = TargetSnapshot{} }
+func (m *TargetSnapshot) String() string { return proto.CompactTextString(m) }
+func (*TargetSnapshot) ProtoMessage()    {}
 
-func (m *File) GetName() string {
+func (m *TargetSnapshot) GetName() string {
 	if m != nil && m.Name != nil {
 		return *m.Name
 	}
 	return ""
 }
 
-func (m *File) GetType() string {
-	if m != nil && m.Type != nil {
-		return *m.Type
-	}
-	return ""
-}
-
-func (m *File) GetHash() string {
+func (m *TargetSnapshot) GetHash() string {
 	if m != nil && m.Hash != nil {
 		return *m.Hash
 	}
 	return ""
 }
 
-func (m *File) GetChildren() []*File {
+func (m *TargetSnapshot) GetInputs() []*FileSnapshot {
 	if m != nil {
-		return m.Children
+		return m.Inputs
 	}
 	return nil
+}
+
+type FileSnapshot struct {
+	Name             *string `protobuf:"bytes,1,req" json:"Name,omitempty"`
+	Hash             *string `protobuf:"bytes,2,req" json:"Hash,omitempty"`
+	Content          *string `protobuf:"bytes,3,req" json:"Content,omitempty"`
+	XXX_unrecognized []byte  `json:"-"`
+}
+
+func (m *FileSnapshot) Reset()         { *m = FileSnapshot{} }
+func (m *FileSnapshot) String() string { return proto.CompactTextString(m) }
+func (*FileSnapshot) ProtoMessage()    {}
+
+func (m *FileSnapshot) GetName() string {
+	if m != nil && m.Name != nil {
+		return *m.Name
+	}
+	return ""
+}
+
+func (m *FileSnapshot) GetHash() string {
+	if m != nil && m.Hash != nil {
+		return *m.Hash
+	}
+	return ""
+}
+
+func (m *FileSnapshot) GetContent() string {
+	if m != nil && m.Content != nil {
+		return *m.Content
+	}
+	return ""
 }
 
 func init() {

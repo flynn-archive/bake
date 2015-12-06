@@ -1,6 +1,7 @@
 package bake
 
 import (
+	"fmt"
 	"os"
 	"path"
 	"path/filepath"
@@ -44,7 +45,7 @@ func (p *Parser) ParseDir(path string) error {
 
 func (p *Parser) parseDir(base, path string) error {
 	// Parse Bakefile in this directory first.
-	if err := p.parseFile(base, filepath.Join(path, "Bakefile")); os.IsNotExist(err) {
+	if err := p.parseFile(base, filepath.Join(path, "Bakefile.lua")); os.IsNotExist(err) {
 		// nop
 	} else if err != nil {
 		return err
@@ -85,7 +86,7 @@ func (p *Parser) parseFile(base, path string) error {
 
 	// Load script into state.
 	if err := p.state.Load(f, path, ""); err != nil {
-		return err
+		return fmt.Errorf("%s: %s", path, err)
 	}
 
 	// Execute script.
@@ -119,6 +120,7 @@ func (p *Parser) init() {
 	p.state.Register("__bake_end_target", p.endTarget)
 	p.state.Register("__bake_set_title", p.setTitle)
 	p.state.Register("exec", p.exec)
+	p.state.Register("sh", p.sh)
 	p.state.Register("depends", p.depends)
 }
 
@@ -135,15 +137,15 @@ func (p *Parser) beginTarget(l *lua.State) int {
 	}
 
 	p.target = &Target{
-		Name:    path.Join(p.path, name),
-		Phony:   phony,
-		WorkDir: p.path,
-		Inputs:  make([]string, len(dependencies)),
+		Name:         path.Join(p.path, name),
+		Phony:        phony,
+		WorkDir:      p.path,
+		Dependencies: make([]string, len(dependencies)),
 	}
 
 	// Copy dependencies with prepended path.
 	for i := range dependencies {
-		p.target.Inputs[i] = path.Join(p.path, dependencies[i])
+		p.target.Dependencies[i] = path.Join(p.path, dependencies[i])
 	}
 
 	return 0
@@ -165,6 +167,14 @@ func (p *Parser) exec(l *lua.State) int {
 
 	p.target.Commands = append(p.target.Commands, cmd)
 
+	return 0
+}
+
+// sh appends an "shell" command to the current target.
+func (p *Parser) sh(l *lua.State) int {
+	p.target.Commands = append(p.target.Commands, &ShellCommand{
+		Source: lua.CheckString(l, 1),
+	})
 	return 0
 }
 

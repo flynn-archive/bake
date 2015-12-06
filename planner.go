@@ -6,6 +6,9 @@ type Planner struct {
 	pkg *Package
 
 	builds map[string]*Build
+
+	// Used to determine dirty targets since last build.
+	Snapshot *Snapshot
 }
 
 // NewPlanner returns a new instance of Planner.
@@ -55,6 +58,8 @@ func (p *Planner) planMatch(pattern string) ([]*Build, error) {
 		b, err := p.planTarget(t)
 		if err != nil {
 			return nil, err
+		} else if b == nil {
+			continue
 		}
 		builds = append(builds, b)
 	}
@@ -69,9 +74,18 @@ func (p *Planner) planTarget(t *Target) (*Build, error) {
 	}
 
 	// Find dependent builds and changed inputs.
-	dependencies, err := p.planMatches(t.Inputs)
+	dependencies, err := p.planMatches(t.Dependencies)
 	if err != nil {
 		return nil, err
+	}
+
+	// If there are no dependencies then check if target changed or its files are dirty.
+	if len(dependencies) == 0 && p.Snapshot != nil {
+		if dirty, err := p.Snapshot.IsTargetDirty(t); err != nil {
+			return nil, err
+		} else if !dirty {
+			return nil, nil
+		}
 	}
 
 	// Create build and add it to the lookup.

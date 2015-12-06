@@ -16,7 +16,7 @@ func TestParser_Parse_NoDependencies(t *testing.T) {
 	path := MustTempDir()
 	defer MustRemoveAll(path)
 
-	MustWriteFile(filepath.Join(path, "Bakefile"), []byte(`
+	MustWriteFile(filepath.Join(path, "Bakefile.lua"), []byte(`
 target("bin/flynn-host", function()
 	exec "run1.sh"
 	exec "run2.sh"
@@ -33,8 +33,8 @@ end)
 	target := p.Package.Target("bin/flynn-host")
 	if target == nil {
 		t.Fatal("expected target")
-	} else if len(target.Inputs) != 0 {
-		t.Fatalf("unexpected inputs: %v", target.Inputs)
+	} else if len(target.Dependencies) != 0 {
+		t.Fatalf("unexpected dependencies: %v", target.Dependencies)
 	} else if !reflect.DeepEqual(target.Commands, []bake.Command{
 		&bake.ExecCommand{Args: []string{"run1.sh"}},
 		&bake.ExecCommand{Args: []string{"run2.sh"}},
@@ -48,7 +48,7 @@ func TestParser_Parse_Dependencies(t *testing.T) {
 	path := MustTempDir()
 	defer MustRemoveAll(path)
 
-	MustWriteFile(filepath.Join(path, "Bakefile"), []byte(`
+	MustWriteFile(filepath.Join(path, "Bakefile.lua"), []byte(`
 target("bin/flynn-host", depends("A", "B"), function() end)
 `))
 
@@ -62,8 +62,8 @@ target("bin/flynn-host", depends("A", "B"), function() end)
 	target := p.Package.Target("bin/flynn-host")
 	if target == nil {
 		t.Fatal("expected target")
-	} else if !reflect.DeepEqual(target.Inputs, []string{"A", "B"}) {
-		t.Fatalf("unexpected inputs: %v", target.Inputs)
+	} else if !reflect.DeepEqual(target.Dependencies, []string{"A", "B"}) {
+		t.Fatalf("unexpected denpendencies: %v", target.Dependencies)
 	}
 }
 
@@ -85,6 +85,9 @@ func MustRemoveAll(path string) {
 
 // MustWriteFile writes data to filename. Panic on error.
 func MustWriteFile(filename string, data []byte) {
+	if err := os.MkdirAll(filepath.Dir(filename), 0777); err != nil {
+		panic(err)
+	}
 	if err := ioutil.WriteFile(filename, data, 0666); err != nil {
 		panic(err)
 	}

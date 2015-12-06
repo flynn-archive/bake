@@ -20,11 +20,17 @@ func TestFileSystem_Read(t *testing.T) {
 	c := MustMountFS(fs)
 	defer c.Unmount()
 
-	// Generate fake file.
+	// Create a new root copy.
+	root := fs.CreateRoot()
+	if root.ID() != `0000` {
+		t.Fatalf("unexpected root id: %s", root.ID())
+	}
+
+	// Generate fake file within root.
 	fs.MustWriteFile("foo/bar", []byte{0, 1, 2, 3}, 0666)
 
 	// Open and read contents of file through 9p.
-	f, err := c.FOpen("/foo/bar", go9p.OREAD)
+	f, err := c.FOpen("/0000/foo/bar", go9p.OREAD)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +44,7 @@ func TestFileSystem_Read(t *testing.T) {
 	}
 
 	// Verify readset.
-	if rs := fs.ReadsetSlice(); !reflect.DeepEqual(rs, []string{"/foo/bar"}) {
+	if rs := root.ReadsetSlice(); !reflect.DeepEqual(rs, []string{"/foo/bar"}) {
 		t.Fatalf("unexpected readset: %#v", rs)
 	}
 }
@@ -49,16 +55,17 @@ func TestFileSystem_Write(t *testing.T) {
 	defer fs.Close()
 	c := MustMountFS(fs)
 	defer c.Unmount()
+	root := fs.CreateRoot()
 
 	// Create directory through 9p.
-	if f, err := c.FCreate("/foo", 0777|go9p.DMDIR, go9p.OREAD); err != nil {
+	if f, err := c.FCreate("/0000/foo", 0777|go9p.DMDIR, go9p.OREAD); err != nil {
 		t.Fatal(err)
 	} else if err = f.Close(); err != nil {
 		t.Fatal(err)
 	}
 
 	// Open file through 9p.
-	f, err := c.FCreate("/foo/bar", 0777, go9p.OWRITE)
+	f, err := c.FCreate("/0000/foo/bar", 0777, go9p.OWRITE)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,14 +77,14 @@ func TestFileSystem_Write(t *testing.T) {
 	}
 
 	// Read local file.
-	if buf, err := ioutil.ReadFile(filepath.Join(fs.Root, "foo", "bar")); err != nil {
+	if buf, err := ioutil.ReadFile(filepath.Join(fs.Path(), "foo", "bar")); err != nil {
 		t.Fatal(err)
 	} else if !bytes.Equal(buf, []byte{0, 1, 2, 3}) {
 		t.Fatalf("unexpected bytes: %x", buf)
 	}
 
 	// Verify writeset.
-	if ws := fs.WritesetSlice(); !reflect.DeepEqual(ws, []string{"/foo", "/foo/bar"}) {
+	if ws := root.WritesetSlice(); !reflect.DeepEqual(ws, []string{"/foo", "/foo/bar"}) {
 		t.Fatalf("unexpected writeset: %#v", ws)
 	}
 }
@@ -88,17 +95,18 @@ func TestFileSystem_Remove(t *testing.T) {
 	defer fs.Close()
 	c := MustMountFS(fs)
 	defer c.Unmount()
+	root := fs.CreateRoot()
 
 	// Generate fake file.
 	fs.MustWriteFile("foo/bar", []byte{0, 1, 2, 3}, 0666)
 
 	// Remove file through 9p.
-	if err := c.FRemove("/foo/bar"); err != nil {
+	if err := c.FRemove("/0000/foo/bar"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Verify writeset.
-	if ws := fs.WritesetSlice(); !reflect.DeepEqual(ws, []string{"/foo/bar"}) {
+	if ws := root.WritesetSlice(); !reflect.DeepEqual(ws, []string{"/foo/bar"}) {
 		t.Fatalf("unexpected writeset: %#v", ws)
 	}
 }
@@ -116,8 +124,7 @@ func NewFileSystem() *FileSystem {
 		panic(err)
 	}
 
-	fs := &FileSystem{FileSystem: p9.NewFileSystem()}
-	fs.Root = path
+	fs := &FileSystem{FileSystem: p9.NewFileSystem(path)}
 	fs.Addr = ":0"
 	return fs
 }
@@ -134,20 +141,28 @@ func OpenFileSystem() *FileSystem {
 // Close closes the file system and removes the underlying temp directory.
 func (fs *FileSystem) Close() error {
 	err := fs.FileSystem.Close()
-	os.RemoveAll(fs.Root)
+	os.RemoveAll(fs.Path())
 	return err
 }
 
-func (fs *FileSystem) MustWriteFile(filename string, data []byte, perm os.FileMode) {
-	path := filepath.Join(fs.Root, filename)
+// CreateRoot creates a new root and wraps it in the test wrapper.
+func (fs *FileSystem) CreateRoot() *FileSystemRoot {
+	return &FileSystemRoot{fs.FileSystem.CreateRoot().(*p9.FileSystemRoot)}
+}
 
+func (fs *FileSystem) MustWriteFile(filename string, data []byte, perm os.FileMode) {
+	path := filepath.Join(fs.Path(), filename)
 	if err := os.MkdirAll(filepath.Dir(path), 0777); err != nil {
 		panic(err)
 	}
-
 	if err := ioutil.WriteFile(path, data, perm); err != nil {
 		panic(err)
 	}
+}
+
+// FileSystemRoot represents a test wrapper for p9.FileSystemRoot.
+type FileSystemRoot struct {
+	*p9.FileSystemRoot
 }
 
 // MustMountFS mounts a client to fs. Panic on error.

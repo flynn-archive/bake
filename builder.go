@@ -7,6 +7,8 @@ import (
 	"io/ioutil"
 	"math/rand"
 	"os/exec"
+	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -30,6 +32,9 @@ type Builder struct {
 
 	// Used for tracking read/write access during build steps.
 	FileSystem FileSystem
+
+	// Used for persisting the last state of the file system.
+	Snapshot *Snapshot
 
 	Output io.Writer
 }
@@ -111,14 +116,25 @@ func (b *Builder) build(build *Build) {
 	// Execute build after dependencies are finished.
 	target := build.Target()
 	if target != nil {
+		// Create a root for file tracking.
+		root := b.FileSystem.CreateRoot()
+
 		fmt.Printf("BUILD: %s\n", target.Name)
 		for _, cmd := range target.Commands {
-			if err := b.run(build, cmd); err != nil {
+			if err := b.run(build, cmd, filepath.Join(root.Path(), build.Target().WorkDir)); err != nil {
 				build.Done(err)
 				return
 			}
 		}
 		fmt.Println("")
+
+		// Persist snapshot.
+		if err := b.Snapshot.AddTarget(target, stringSetSlice(root.Readset())); err != nil {
+			build.Done(err)
+			return
+		}
+
+		// TODO: Remove outputs not listed by the target.
 	}
 
 	// Mark build as finished with no error.
@@ -143,22 +159,46 @@ func (b *Builder) reserve(build *Build) (reserved bool) {
 }
 
 // runs executes a command.
-func (b *Builder) run(build *Build, cmd Command) error {
+func (b *Builder) run(build *Build, cmd Command, workDir string) error {
 	switch cmd := cmd.(type) {
 	case *ExecCommand:
-		return b.runExec(build, cmd)
+		return b.runExec(build, cmd, workDir)
+	case *ShellCommand:
+		return b.runShell(build, cmd, workDir)
 	default:
 		panic(fmt.Sprintf("invalid command type: %T", cmd))
 	}
 }
 
 // runExec runs an "exec" command against the shell.
-func (b *Builder) runExec(build *Build, cmd *ExecCommand) error {
+func (b *Builder) runExec(build *Build, cmd *ExecCommand, workDir string) error {
 	fmt.Printf("  %s\n", strings.Join(cmd.Args, " "))
 
 	c := exec.Command(cmd.Args[0], cmd.Args[1:]...)
-	c.Dir = build.target.WorkDir
+	c.Dir = workDir
 	c.Stdout = build.stdout.writer
 	c.Stderr = build.stderr.writer
 	return c.Run()
+}
+
+// runShell runs an "sh" command against the shell.
+func (b *Builder) runShell(build *Build, cmd *ShellCommand, workDir string) error {
+	fmt.Printf("  %s\n", cmd.Source)
+
+	c := exec.Command("/bin/sh")
+	c.Dir = workDir
+	c.Stdin = strings.NewReader(cmd.Source)
+	c.Stdout = build.stdout.writer
+	c.Stderr = build.stderr.writer
+	return c.Run()
+}
+
+// stringSetSlice returns a string of all keys in a string set.
+func stringSetSlice(m map[string]struct{}) []string {
+	a := make([]string, 0, len(m))
+	for k := range m {
+		a = append(a, k)
+	}
+	sort.Strings(a)
+	return a
 }
