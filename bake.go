@@ -6,6 +6,7 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"sort"
 	"sync"
 )
 
@@ -15,6 +16,16 @@ import (
 type Package struct {
 	Name    string
 	Targets []*Target
+}
+
+// TargetNames returns a sorted list of all target names.
+func (p *Package) TargetNames() []string {
+	a := make([]string, len(p.Targets))
+	for i, t := range p.Targets {
+		a[i] = t.Name
+	}
+	sort.Strings(a)
+	return a
 }
 
 // Target returns a target by name or by output.
@@ -35,7 +46,7 @@ func (p *Package) Target(name string) *Target {
 }
 
 // MatchTargets returns a list of targets matching a glob pattern.
-// Matches pattern against target name or outputs.
+// Matches pattern against target name or output files.
 func (p *Package) MatchTargets(pattern string) ([]*Target, error) {
 	var a []*Target
 	for _, t := range p.Targets {
@@ -67,7 +78,7 @@ type Target struct {
 	Commands []Command
 
 	// Depedent target names.
-	Inputs []string
+	Dependencies []string
 
 	// Files to be retained after build.
 	// Any files written that are not declared here are assumed to be temporary files.
@@ -90,12 +101,23 @@ func MatchTarget(pattern string, t *Target) (matched bool, err error) {
 }
 
 // Command represents an executable command.
-type Command interface{}
+type Command interface {
+	command()
+}
 
 // ExecCommand represents a command that is executed against the OS's exec().
 type ExecCommand struct {
 	Args []string
 }
+
+func (*ExecCommand) command() {}
+
+// ShellCommand represents a command that executes a shell script against /bin/sh.
+type ShellCommand struct {
+	Source string
+}
+
+func (*ShellCommand) command() {}
 
 // File represents a physical file or directory in a package.
 type File struct {

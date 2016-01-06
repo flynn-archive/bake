@@ -27,8 +27,8 @@ const DefaultAddr = "127.0.0.1:564"
 
 func init() {
 	bake.RegisterFileSystem(Type, func(opt bake.FileSystemOptions) (bake.FileSystem, error) {
-		fs := NewFileSystem()
-		fs.Root = opt.Root
+		fs := NewFileSystem(opt.Path)
+		fs.MountPath = opt.MountPath
 		return fs, nil
 	})
 }
@@ -39,20 +39,24 @@ type FileSystem struct {
 	srv go9p.Srv
 	ln  net.Listener
 
-	// Sets that track which files & dirs have been read or written.
-	readset  map[string]struct{}
-	writeset map[string]struct{}
+	path string // Directory to serve
+
+	// Copies of the root path.
+	// These are separated to allow concurrent tracking of file system access.
+	roots      map[string]*FileSystemRoot
+	nextRootID int
 
 	closing chan struct{}
 	wg      sync.WaitGroup
 
-	Root string
-
 	Addr string
+
+	// Directory to mount to.
+	MountPath string
 }
 
-// NewFileSystem returns a new instance of FileSystem with defaults.
-func NewFileSystem() *FileSystem {
+// NewFileSystem returns a new instance of FileSystem.
+func NewFileSystem(path string) *FileSystem {
 	return &FileSystem{
 		srv: go9p.Srv{
 			Id:         "bakefs",
@@ -60,9 +64,8 @@ func NewFileSystem() *FileSystem {
 			Debuglevel: 0,
 		},
 
-		readset:  make(map[string]struct{}),
-		writeset: make(map[string]struct{}),
-
+		path:    path,
+		roots:   make(map[string]*FileSystemRoot),
 		closing: make(chan struct{}),
 
 		Addr: DefaultAddr,
@@ -92,11 +95,22 @@ func (fs *FileSystem) Open() error {
 		panic("could not start file system")
 	}
 
+	// Mount to mount path.
+	if fs.MountPath != "" {
+		if err := fs.mount(); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
 // Close closes the file system. Returns after listener has returned.
 func (fs *FileSystem) Close() error {
+	if fs.MountPath != "" {
+		fs.unmount()
+	}
+
 	if fs.ln != nil {
 		fs.ln.Close()
 	}
@@ -107,6 +121,9 @@ func (fs *FileSystem) Close() error {
 
 	return nil
 }
+
+// Path returns the path being served.
+func (fs *FileSystem) Path() string { return fs.path }
 
 // Listener returns the underlying listener. Available after Open().
 func (fs *FileSystem) Listener() net.Listener { return fs.ln }
@@ -122,52 +139,27 @@ func (fs *FileSystem) serve() error {
 	}
 }
 
-// Readset returns a set of files that have been read from the file system.
-func (fs *FileSystem) Readset() map[string]struct{} {
+// CreateRoot returns a new copy of the root path of the file system.
+func (fs *FileSystem) CreateRoot() bake.FileSystemRoot {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
-	return copySet(fs.readset)
+
+	// Generate string id to use for root.
+	id := fmt.Sprintf("%04x", fs.nextRootID)
+	fs.nextRootID++
+
+	// Create root and add it to map.
+	root := NewFileSystemRoot(id, path.Join(fs.MountPath, id))
+	fs.roots[id] = root
+
+	return root
 }
 
-// ReadsetSlice returns a slice of files that have been read from the file system.
-func (fs *FileSystem) ReadsetSlice() []string {
+// Root returns a root by id.
+func (fs *FileSystem) Root(id string) *FileSystemRoot {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
-
-	a := make([]string, 0, len(fs.readset))
-	for k := range fs.readset {
-		a = append(a, k)
-	}
-	sort.Strings(a)
-	return a
-}
-
-// Writeset returns a set of files that have been written to the file system.
-func (fs *FileSystem) Writeset() map[string]struct{} {
-	fs.mu.Lock()
-	defer fs.mu.Unlock()
-	return copySet(fs.writeset)
-}
-
-// WritesetSlice returns a slice of files that have been written from the file system.
-func (fs *FileSystem) WritesetSlice() []string {
-	fs.mu.Lock()
-	defer fs.mu.Unlock()
-
-	a := make([]string, 0, len(fs.writeset))
-	for k := range fs.writeset {
-		a = append(a, k)
-	}
-	sort.Strings(a)
-	return a
-}
-
-// Reset empties all file tracking sets.
-func (fs *FileSystem) Reset() {
-	fs.mu.Lock()
-	defer fs.mu.Unlock()
-	fs.readset = make(map[string]struct{})
-	fs.writeset = make(map[string]struct{})
+	return fs.roots[id]
 }
 
 // Ensure fileSystem implements go9p.SrvReqOps.
@@ -176,24 +168,39 @@ var _ go9p.SrvReqOps = (*fileSystem)(nil)
 // fileSystem is a wrapper type for FileSystem that implements go9p callbacks.
 type fileSystem FileSystem
 
-// addToReadset adds filename to the readset.
-func (fs *fileSystem) addToReadset(filename string) {
-	fs.mu.Lock()
-	defer fs.mu.Unlock()
-	fs.readset[strings.TrimPrefix(filename, fs.Root)] = struct{}{}
+// addToReadset adds s to the readset.
+func (fs *fileSystem) addToReadset(rootID, filename string) {
+	root := (*FileSystem)(fs).Root(rootID)
+	if root == nil {
+		return
+	}
+	root.AddToReadset(strings.TrimPrefix(filename, fs.path))
 }
 
-// addToWriteset adds filename to the writeset.
-func (fs *fileSystem) addToWriteset(filename string) {
-	fs.mu.Lock()
-	defer fs.mu.Unlock()
-	fs.writeset[strings.TrimPrefix(filename, fs.Root)] = struct{}{}
+// addToWriteset adds s to the writeset.
+func (fs *fileSystem) addToWriteset(rootID, filename string) {
+	root := (*FileSystem)(fs).Root(rootID)
+	if root == nil {
+		return
+	}
+	root.AddToWriteset(strings.TrimPrefix(filename, fs.path))
+}
+
+// split splits s into the root name and remaining filepath.
+func split(s string) (root, filename string) {
+	a := strings.SplitN(s, "/", 3)
+	if len(a) < 3 {
+		return "", filename
+	}
+	return a[1], "/" + a[2]
 }
 
 // Attach creates a file handle on the file system.
 func (fs *fileSystem) Attach(req *go9p.SrvReq) {
+	rootID, filename := split(req.Tc.Aname)
 	aux := &Aux{
-		path: path.Join(fs.Root, req.Tc.Aname),
+		rootID: rootID,
+		path:   path.Join(fs.path, filename),
 	}
 	req.Fid.Aux = aux
 
@@ -217,15 +224,28 @@ func (fs *fileSystem) Walk(req *go9p.SrvReq) {
 
 	// Create a new file handle, if necessary.
 	if req.Newfid.Aux == nil {
-		req.Newfid.Aux = &Aux{}
+		req.Newfid.Aux = &Aux{rootID: aux.rootID}
 	}
 
 	nfid := req.Newfid.Aux.(*Aux)
-	wqids := make([]go9p.Qid, len(req.Tc.Wname))
+	wqids := make([]go9p.Qid, 0, len(req.Tc.Wname))
 	newPath := aux.path
-	i := 0
-	for ; i < len(req.Tc.Wname); i++ {
-		p := newPath + "/" + req.Tc.Wname[i]
+
+	// Append actual files after the root.
+	for i, name := range req.Tc.Wname {
+		// If we have no root then the first segment is the root ID.
+		if nfid.rootID == "" {
+			nfid.rootID = name
+			if root := (*FileSystem)(fs).Root(nfid.rootID); root == nil {
+				req.RespondError(go9p.Enoent)
+				return
+			}
+			wqids = append(wqids, *newRootQid(nfid.rootID))
+			continue
+		}
+
+		// Otherwise we're already walking a root so continue to traverse the files.
+		p := newPath + "/" + name
 		st, err := os.Lstat(p)
 		if err != nil {
 			if i == 0 {
@@ -235,12 +255,12 @@ func (fs *fileSystem) Walk(req *go9p.SrvReq) {
 			break
 		}
 
-		wqids[i] = *newQid(st)
+		wqids = append(wqids, *newQid(st))
 		newPath = p
 	}
 
 	nfid.path = newPath
-	req.RespondRwalk(wqids[0:i])
+	req.RespondRwalk(wqids)
 }
 
 // Open opens a local file.
@@ -262,12 +282,12 @@ func (fs *fileSystem) Open(req *go9p.SrvReq) {
 
 	// Add to appropriate set.
 	if req.Tc.Mode&go9p.OREAD != 0 {
-		fs.addToReadset(aux.path)
+		fs.addToReadset(aux.rootID, aux.path)
 	} else if req.Tc.Mode&go9p.OWRITE != 0 {
-		fs.addToWriteset(aux.path)
+		fs.addToWriteset(aux.rootID, aux.path)
 	} else if req.Tc.Mode&go9p.ORDWR != 0 {
-		fs.addToReadset(aux.path)
-		fs.addToWriteset(aux.path)
+		fs.addToReadset(aux.rootID, aux.path)
+		fs.addToWriteset(aux.rootID, aux.path)
 	}
 
 	req.RespondRopen(aux.qid(), 0)
@@ -338,7 +358,7 @@ func (fs *fileSystem) Create(req *go9p.SrvReq) {
 	aux.file = file
 
 	// Save file to writeset.
-	fs.addToWriteset(path)
+	fs.addToWriteset(aux.rootID, path)
 
 	if err := aux.stat(); err != nil {
 		req.RespondError(err)
@@ -357,7 +377,7 @@ func (fs *fileSystem) Read(req *go9p.SrvReq) {
 	}
 
 	// Add to readset.
-	fs.addToReadset(aux.path)
+	fs.addToReadset(aux.rootID, aux.path)
 
 	go9p.InitRread(req.Rc, req.Tc.Count)
 	if aux.st.IsDir() {
@@ -443,7 +463,7 @@ func (fs *fileSystem) Write(req *go9p.SrvReq) {
 	}
 
 	// Add to writeset.
-	fs.addToWriteset(aux.path)
+	fs.addToWriteset(aux.rootID, aux.path)
 
 	n, err := aux.file.WriteAt(req.Tc.Data, int64(req.Tc.Offset))
 	if err != nil {
@@ -464,7 +484,7 @@ func (fs *fileSystem) Remove(req *go9p.SrvReq) {
 	}
 
 	// Add to writeset.
-	fs.addToWriteset(aux.path)
+	fs.addToWriteset(aux.rootID, aux.path)
 
 	if err := os.Remove(aux.path); err != nil {
 		req.RespondError(toError(err))
@@ -499,7 +519,7 @@ func (fs *fileSystem) Wstat(req *go9p.SrvReq) {
 	}
 
 	// Add to writeset.
-	fs.addToWriteset(aux.path)
+	fs.addToWriteset(aux.rootID, aux.path)
 
 	dir := &req.Tc.Dir
 	if dir.Mode != 0xFFFFFFFF {
@@ -554,7 +574,7 @@ func (fs *fileSystem) Wstat(req *go9p.SrvReq) {
 		// if first char is / it is relative to root, else relative to cwd.
 		var destpath string
 		if dir.Name[0] == '/' {
-			destpath = path.Join(fs.Root, dir.Name)
+			destpath = path.Join(fs.path, dir.Name)
 			fmt.Printf("/ results in %s\n", destpath)
 		} else {
 			auxdir, _ := path.Split(aux.path)
@@ -614,8 +634,90 @@ func (fs *fileSystem) FidDestroy(fid *go9p.SrvFid) {
 // func (fs *fileSystem) ConnOpened(conn *go9p.Conn) { println("conn open") }
 // func (fs *fileSystem) ConnClosed(conn *go9p.Conn) { println("conn closed") }
 
+// FileSystemRoot represents root path of the file system.
+// This is used for tracking read and write access.
+type FileSystemRoot struct {
+	mu   sync.Mutex
+	id   string
+	path string
+
+	readset  map[string]struct{}
+	writeset map[string]struct{}
+}
+
+// NewFileSystemRoot returns a new filesystem root identified by id.
+func NewFileSystemRoot(id, path string) *FileSystemRoot {
+	return &FileSystemRoot{
+		id:       id,
+		path:     path,
+		readset:  make(map[string]struct{}),
+		writeset: make(map[string]struct{}),
+	}
+}
+
+// ID returns the identifier for this root.
+func (r *FileSystemRoot) ID() string { return r.id }
+
+// Path returns the path this root is served from.
+func (r *FileSystemRoot) Path() string { return r.path }
+
+// Readset returns a set of files that have been read from the file system.
+func (r *FileSystemRoot) Readset() map[string]struct{} {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return copySet(r.readset)
+}
+
+// ReadsetSlice returns a slice of files that have been read from the file system.
+func (r *FileSystemRoot) ReadsetSlice() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	a := make([]string, 0, len(r.readset))
+	for k := range r.readset {
+		a = append(a, k)
+	}
+	sort.Strings(a)
+	return a
+}
+
+// AddToReadset adds s to the root's readset.
+func (r *FileSystemRoot) AddToReadset(s string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.readset[s] = struct{}{}
+}
+
+// Writeset returns a set of files that have been written to the file system.
+func (r *FileSystemRoot) Writeset() map[string]struct{} {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return copySet(r.writeset)
+}
+
+// WritesetSlice returns a slice of files that have been written from the file system.
+func (r *FileSystemRoot) WritesetSlice() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	a := make([]string, 0, len(r.writeset))
+	for k := range r.writeset {
+		a = append(a, k)
+	}
+	sort.Strings(a)
+	return a
+}
+
+// AddToWriteset adds s to the root's writeset.
+func (r *FileSystemRoot) AddToWriteset(s string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.writeset[s] = struct{}{}
+}
+
 // Aux represents auxillary data for 9p file handles.
 type Aux struct {
+	rootID     string
 	path       string
 	file       *os.File
 	dirs       []os.FileInfo
@@ -748,6 +850,24 @@ func newQid(fi os.FileInfo) *go9p.Qid {
 		Type:    typ,
 	}
 }
+
+// newRootQid creates a new qid from a root id.
+func newRootQid(id string) *go9p.Qid {
+	// Parse identifier into number.
+	num, err := strconv.ParseUint(id, 16, 64)
+	if err != nil {
+		panic(err)
+	}
+
+	return &go9p.Qid{
+		Path:    rootQidFlag & num,
+		Version: 1,
+		Type:    go9p.QTDIR,
+	}
+}
+
+// rootQidFlag is a flag on a qid ids for root paths.
+const rootQidFlag = uint64(1 << 63)
 
 // mode converts an os.FileMode to a go9p mode.
 func mode(m os.FileMode, dotu bool) uint32 {

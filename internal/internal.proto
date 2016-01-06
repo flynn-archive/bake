@@ -1,8 +1,13 @@
 package internal;
 
-message File {
+message TargetSnapshot {
 	required string Name = 1;
-	required string Type = 2;
-	required string Hash = 3;
-	repeated File Children = 4;
+	required string Hash = 2;
+	repeated FileSnapshot Inputs = 3;
+}
+
+message FileSnapshot {
+	required string Name = 1;
+	required string Hash = 2;
+	required string Content = 3;
 }
