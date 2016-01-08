@@ -114,6 +114,13 @@ func (m *Main) Run() error {
 	if err != nil {
 		return fmt.Errorf("abs path: %s", err)
 	}
+
+	// Ensure root is not a symbolic link.
+	// This causes issues with the 9p filesystem otherwise.
+	root, err = filepath.EvalSymlinks(root)
+	if err != nil {
+		return fmt.Errorf("eval symlinks: %s", err)
+	}
 	m.Root = root
 
 	// Initialize snapshot.
