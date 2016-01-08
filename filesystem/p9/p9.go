@@ -23,7 +23,7 @@ import (
 const Type = "9p"
 
 // DefaultAddr is the default address to listen on for the file system.
-const DefaultAddr = "127.0.0.1:564"
+const DefaultAddr = "127.0.0.1:0"
 
 func init() {
 	bake.RegisterFileSystem(Type, func(opt bake.FileSystemOptions) (bake.FileSystem, error) {
